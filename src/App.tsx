@@ -48,49 +48,21 @@ const LanguageContext = createContext((key: string) => key);
 const useTranslation = () => useContext(LanguageContext);
 
 // SECTION: INTERFACES (UPDATED)
+// Generic SensorData interface that can hold any number of key-value pairs
 interface SensorData {
-    Temperature: number;
-    Humidity: number;
-    soilMoisture6cm: number;
-    soilMoisture15cm: number;
-    lightIntensity: number;
-    irrigation: boolean;
-    weight: number;
-    accelerationX: number;
-    accelerationY: number;
-    accelerationZ: number;
-    gyroX: number;
-    gyroY: number;
-    gyroZ: number;
-    tilt: number;
-    latitude: number;
-    longitude: number;
-    altitude: number;
-    gpsAccuracy: number;
-    RSSI: number; // Still keeping RSSI for signal strength
+    [key: string]: number | boolean;
 }
 interface DataPoint extends SensorData { timestamp: number; }
-interface RawData { [epoch: string]: SensorData; } // This will be the structure under `sensorData`
+
+// Raw data from Firebase is now just a collection of epoch-keyed sensor data under the slave
 interface DeviceRawData {
-    sensorData?: { [epoch: string]: Omit<SensorData, 'RSSI'> }; // Sensor data without RSSI
-    RSSI?: { [epoch: string]: number }; // RSSI often comes separately
-    Control?: { Irrigation: number };
+    [epoch: string]: SensorData;
 }
 
 interface Stats { min: number; max: number; avg: number; current: number; }
+// DeviceStats will now have dynamic keys based on what's received
 interface DeviceStats {
-    Temperature?: Stats;
-    Humidity?: Stats;
-    soilMoisture6cm?: Stats;
-    soilMoisture15cm?: Stats;
-    lightIntensity?: Stats;
-    weight?: Stats;
-    tilt?: Stats;
-    latitude?: Stats;
-    longitude?: Stats;
-    altitude?: Stats;
-    gpsAccuracy?: Stats;
-    RSSI?: Stats;
+    [sensorKey: string]: Stats;
 }
 interface AnomalyData { [key: string]: number[]; }
 interface ProcessedDeviceData { fullData: DataPoint[]; current: DataPoint | null; stats: DeviceStats; anomalyData: AnomalyData; }
@@ -100,8 +72,8 @@ interface CropProfile {
     name: string;
     temperature: { min: number; max: number };
     humidity: { min: number; max: number };
-    moisture6cm: { min: number; max: number }; // New moisture keys
-    moisture15cm: { min: number; max: number }; // New moisture keys
+    moisture6cm: { min: number; max: number }; // Renamed from soilMoisture6cm
+    moisture15cm: { min: number; max: number }; // Renamed from soilMoisture15cm
     lightIntensity: { min: number; max: number };
 }
 interface IrrigationSession { startTime: number; endTime: number; duration: number; startMoisture: number; endMoisture: number; moistureChange: number; avgTemp: number; }
@@ -461,21 +433,25 @@ const Sidebar: React.FC<any> = ({ isOpen, isDarkMode, setIsDarkMode, language, s
     );
 };
 
+// Moved this component outside of Header to prevent re-declaration on every render
+const CustomDatePickerInput = forwardRef<HTMLButtonElement, { value?: string; onClick?: () => void }>(
+    ({ value, onClick }, ref) => (
+        <button
+            onClick={onClick}
+            ref={ref}
+            className="flex items-center gap-2 text-sm font-semibold text-slate-600 dark:text-slate-300 bg-slate-200/50 dark:bg-slate-800/50 px-3 py-2 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
+        >
+            <CalendarIcon size={16} />
+            {value}
+        </button>
+    )
+);
+CustomDatePickerInput.displayName = 'CustomDatePickerInput';
+
+
 const Header: React.FC<any> = ({ onMenuClick, currentData, activeView, irrigationState, onIrrigationToggle, onExport, isExporting, dateRange, setDateRange, cropProfile }) => {
     const t = useTranslation();
     const title = activeView === 'overview' ? t('fleet_overview') : cropProfile?.name ? `${t('dashboard')}: ${cropProfile.name}` : t('dashboard');
-    const CustomDatePickerInput = forwardRef<HTMLButtonElement, { value?: string; onClick?: () => void }>(
-  ({ value, onClick }, ref) => (
-    <button
-      onClick={onClick}
-      ref={ref}
-      className="flex items-center gap-2 text-sm font-semibold text-slate-600 dark:text-slate-300 bg-slate-200/50 dark:bg-slate-800/50 px-3 py-2 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
-    >
-      <CalendarIcon size={16} />
-      {value}
-    </button>
-  )
-);
     const startDate = Array.isArray(dateRange) ? dateRange[0] : null;
     const endDate = Array.isArray(dateRange) ? dateRange[1] : null;
 
@@ -507,10 +483,10 @@ const Header: React.FC<any> = ({ onMenuClick, currentData, activeView, irrigatio
 const DetailView: React.FC<any> = ({ deviceData, cropProfile, notes, setNotes, isDarkMode }) => {
     const [activePanel, setActivePanel] = useState('live');
     const t = useTranslation();
-    // UPDATED SENSOR_CONFIG with new sensors
-    const SENSOR_CONFIG = {
-        Temperature: { label: t('temperature'), unit: "°C", icon: Thermometer, color: "amber" },
-        Humidity: { label: t('humidity'), unit: "%", icon: Cloud, color: "sky" },
+
+    const SENSOR_CONFIG: { [key: string]: { label: string; unit: string; icon: React.ElementType; color: string; } } = {
+        temperature: { label: t('temperature'), unit: "°C", icon: Thermometer, color: "amber" },
+        humidity: { label: t('humidity'), unit: "%", icon: Cloud, color: "sky" },
         soilMoisture6cm: { label: t('soil_moisture_6cm'), unit: "cb", icon: Sprout, color: "emerald" },
         soilMoisture15cm: { label: t('soil_moisture_15cm'), unit: "cb", icon: Leaf, color: "teal" },
         lightIntensity: { label: t('light_intensity'), unit: "lux", icon: Lightbulb, color: "yellow" },
@@ -521,6 +497,7 @@ const DetailView: React.FC<any> = ({ deviceData, cropProfile, notes, setNotes, i
         altitude: { label: t('altitude'), unit: "m", icon: Waves, color: "indigo" },
         gpsAccuracy: { label: t('gps_accuracy'), unit: "m", icon: LocateFixed, color: "pink" },
         RSSI: { label: t('signal_strength'), unit: "dBm", icon: Wifi, color: "violet" }
+        // New sensors will be handled by the default case in SensorCard
     };
     const sessions: IrrigationSession[] = []; // Placeholder for session detection logic
 
@@ -559,10 +536,10 @@ const FleetOverview: React.FC<any> = ({ data, setActiveView, cropProfiles, selec
 
 const DeviceCard: React.FC<{ device: OverviewDeviceData, onClick: () => void, cropProfile?: CropProfile }> = React.memo(({ device, onClick, cropProfile }) => {
     const t = useTranslation();
-    const getStatus = (value: number, key: 'temperature' | 'humidity' | 'moisture6cm' | 'moisture15cm' | 'lightIntensity') => {
+    const getStatus = (value: number, key: keyof CropProfile) => {
         if (!cropProfile || !device.latest || typeof value !== 'number') return 'ideal';
         const limits = cropProfile[key];
-        if (!limits) return 'ideal';
+        if (!limits || !('min' in limits)) return 'ideal';
         if (value < limits.min) return 'low'; if (value > limits.max) return 'high'; return 'ideal';
     };
     const STATUS_COLORS: { [key: string]: string } = { low: 'bg-blue-500', high: 'bg-red-500', ideal: 'bg-emerald-500' };
@@ -582,23 +559,23 @@ const DeviceCard: React.FC<{ device: OverviewDeviceData, onClick: () => void, cr
                     <p className="text-xs text-slate-400 mb-4">{isValid(new Date(device.latest.timestamp)) ? formatDistanceToNow(device.latest.timestamp, { addSuffix: true }) : 'Unknown time'}</p>
                     <div className="space-y-3">
                         {[
-                            { key: 'Temperature', label: t('temperature'), unit: '°C', type: 'temperature' },
-                            { key: 'Humidity', label: t('humidity'), unit: '%', type: 'humidity' },
+                            { key: 'temperature', label: t('temperature'), unit: '°C' },
+                            { key: 'humidity', label: t('humidity'), unit: '%' },
                             { key: 'soilMoisture6cm', label: t('soil_moisture_6cm'), unit: 'cb', type: 'moisture6cm' },
-                            { key: 'lightIntensity', label: t('light_intensity'), unit: 'lux', type: 'lightIntensity' },
+                            { key: 'lightIntensity', label: t('light_intensity'), unit: 'lux' },
                         ].map((item: any) => (
                             <div key={item.key} className="flex justify-between items-center text-sm">
                                 <span className="text-slate-500">{item.label}</span>
                                 <div className="flex items-center gap-2">
-                                    <span className="font-semibold">{device.latest[item.key as keyof SensorData]?.toFixed(1) ?? '--'} {item.unit}</span>
-                                    <div className={clsx("w-2.5 h-2.5 rounded-full", STATUS_COLORS[getStatus(device.latest[item.key as keyof SensorData], item.type)])} />
+                                    <span className="font-semibold">{Number(device.latest?.[item.key] ?? '--').toFixed(1)} {item.unit}</span>
+                                    <div className={clsx("w-2.5 h-2.5 rounded-full", STATUS_COLORS[getStatus(device.latest[item.key] as number, item.type || item.key)])} />
                                 </div>
                             </div>
                         ))}
                         {device.latest.latitude && device.latest.longitude && (
                             <div className="flex justify-between items-center text-sm text-slate-500">
                                 <span>GPS</span>
-                                <span className="font-semibold">{device.latest.latitude.toFixed(4)}, {device.latest.longitude.toFixed(4)}</span>
+                                <span className="font-semibold">{Number(device.latest.latitude).toFixed(4)}, {Number(device.latest.longitude).toFixed(4)}</span>
                             </div>
                         )}
                     </div>
@@ -612,9 +589,11 @@ const DeviceCard: React.FC<{ device: OverviewDeviceData, onClick: () => void, cr
 const LocationCard: React.FC<{ latest: DataPoint | null }> = ({ latest }) => {
     if (!latest || !latest.latitude || !latest.longitude) {
         return (
-            <div className="p-5 rounded-2xl bg-white dark:bg-slate-800 shadow-sm flex items-center justify-center text-slate-500 text-sm">
-                Awaiting GPS lock...
-            </div>
+            <Panel title="Device Location" icon={LocateFixed}>
+                <div className="h-full flex items-center justify-center text-slate-500 text-sm">
+                    Awaiting location data...
+                </div>
+            </Panel>
         );
     }
     const { latitude, longitude, altitude, gpsAccuracy } = latest;
@@ -630,23 +609,23 @@ const LocationCard: React.FC<{ latest: DataPoint | null }> = ({ latest }) => {
                         rel="noopener noreferrer"
                         className="font-semibold hover:text-emerald-500 transition-colors"
                     >
-                        {latitude.toFixed(5)}, {longitude.toFixed(5)}
+                        {Number(latitude).toFixed(5)}, {Number(longitude).toFixed(5)}
                     </a>
                 </div>
                 <div className="flex justify-between items-center text-sm">
                     <span className="text-slate-500">Altitude</span>
-                    <span className="font-semibold">{altitude.toFixed(1)} m</span>
+                    <span className="font-semibold">{Number(altitude ?? 0).toFixed(1)} m</span>
                 </div>
                 <div className="flex justify-between items-center text-sm">
                     <span className="text-slate-500">Accuracy</span>
-                    <span className="font-semibold">{gpsAccuracy.toFixed(1)} m</span>
+                    <span className="font-semibold">{Number(gpsAccuracy ?? 0).toFixed(1)} m</span>
                 </div>
             </div>
         </Panel>
     );
 };
 const IMUCard: React.FC<{ latest: DataPoint | null }> = ({ latest }) => {
-    if (!latest || !latest.tilt) {
+    if (!latest || typeof latest.tilt !== 'number') {
         return null;
     }
     const { tilt, accelerationX, accelerationY, accelerationZ, gyroX, gyroY, gyroZ } = latest;
@@ -654,16 +633,16 @@ const IMUCard: React.FC<{ latest: DataPoint | null }> = ({ latest }) => {
         <Panel title="Inertial Measurement" icon={Compass}>
             <div className="text-center mb-4">
                 <p className="text-slate-500 text-sm">Tilt Angle</p>
-                <p className="text-4xl font-bold">{tilt.toFixed(1)}°</p>
+                <p className="text-4xl font-bold">{Number(tilt).toFixed(1)}°</p>
             </div>
             <div className="grid grid-cols-2 gap-4 text-xs text-center">
                 <div className="p-2 bg-slate-100 dark:bg-slate-700/50 rounded-lg">
                     <p className="font-semibold">Acceleration (G)</p>
-                    <p>X: {accelerationX.toFixed(2)}, Y: {accelerationY.toFixed(2)}, Z: {accelerationZ.toFixed(2)}</p>
+                    <p>X: {Number(accelerationX).toFixed(2)}, Y: {Number(accelerationY).toFixed(2)}, Z: {Number(accelerationZ).toFixed(2)}</p>
                 </div>
                 <div className="p-2 bg-slate-100 dark:bg-slate-700/50 rounded-lg">
                     <p className="font-semibold">Gyroscope (°/s)</p>
-                    <p>X: {gyroX.toFixed(2)}, Y: {gyroY.toFixed(2)}, Z: {gyroZ.toFixed(2)}</p>
+                    <p>X: {Number(gyroX).toFixed(2)}, Y: {Number(gyroY).toFixed(2)}, Z: {Number(gyroZ).toFixed(2)}</p>
                 </div>
             </div>
         </Panel>
@@ -678,9 +657,11 @@ const PlantMoodComponent: React.FC<{ stats?: DeviceStats, cropProfile?: CropProf
 
         let happyPoints = 0;
         let sadPoints = 0;
+        let totalChecks = 0;
 
         const checkStat = (key: keyof DeviceStats, profileKey: keyof CropProfile) => {
             if (stats[key] && cropProfile[profileKey]) {
+                totalChecks++;
                 const current = stats[key]!.current;
                 const { min, max } = cropProfile[profileKey] as { min: number, max: number };
                 if (current >= min && current <= max) {
@@ -691,15 +672,16 @@ const PlantMoodComponent: React.FC<{ stats?: DeviceStats, cropProfile?: CropProf
             }
         };
 
-        checkStat('Temperature', 'temperature');
-        checkStat('Humidity', 'humidity');
+        checkStat('temperature', 'temperature');
+        checkStat('humidity', 'humidity');
         checkStat('soilMoisture6cm', 'moisture6cm');
         checkStat('soilMoisture15cm', 'moisture15cm');
         checkStat('lightIntensity', 'lightIntensity');
 
-        if (sadPoints > 2) return { mood: 'sad', message: "I'm feeling a bit under the weather. Please check my stats!", icon: Frown };
+        if (totalChecks === 0) return { mood: 'neutral', message: "No profile data to compare.", icon: Meh };
+        if (sadPoints > totalChecks / 2) return { mood: 'sad', message: "I'm feeling a bit under the weather. Please check my stats!", icon: Frown };
         if (sadPoints > 0) return { mood: 'neutral', message: "I'm okay, but some things could be better.", icon: Meh };
-        if (happyPoints === 5) return { mood: 'excited', message: "Everything is perfect! I'm thriving!", icon: Sparkles };
+        if (happyPoints === totalChecks) return { mood: 'excited', message: "Everything is perfect! I'm thriving!", icon: Sparkles };
         return { mood: 'happy', message: "I'm feeling great! Conditions are just right.", icon: Smile };
     }, [stats, cropProfile]);
 
@@ -734,11 +716,24 @@ const LiveDashboard: React.FC<any> = ({ stats, sensorConfig, cropProfile, isDark
     <motion.div className="space-y-6" initial="hidden" animate="visible" variants={{ visible: { transition: { staggerChildren: 0.05 } } }}>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
             <PlantMoodComponent stats={stats} cropProfile={cropProfile} />
-            {['Temperature', 'Humidity', 'soilMoisture6cm', 'soilMoisture15cm', 'lightIntensity', 'weight', 'RSSI'].map(key => {
-                if (!stats[key]) return null;
+
+            {/* Dynamically render a SensorCard for every stat available */}
+            {Object.keys(stats).map(key => {
+                const config = sensorConfig[key] || {
+                    label: key.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase()), // Auto-format label
+                    unit: "",
+                    icon: Activity, // Default icon
+                    color: "slate"
+                };
+
+                // Do not render cards for raw IMU/GPS data here as they have dedicated components
+                if (['accelerationX', 'accelerationY', 'accelerationZ', 'gyroX', 'gyroY', 'gyroZ', 'latitude', 'longitude', 'altitude', 'gpsAccuracy'].includes(key)) {
+                    return null;
+                }
+
                 return (
                     <motion.div key={key} variants={{ hidden: { opacity: 0, y: 20 }, visible: { opacity: 1, y: 0 } }}>
-                        <SensorCard label={sensorConfig[key].label} stats={stats[key]} unit={sensorConfig[key].unit} icon={sensorConfig[key].icon} color={sensorConfig[key].color} cropProfile={cropProfile} dataKey={key} />
+                        <SensorCard label={config.label} stats={stats[key]} unit={config.unit} icon={config.icon} color={config.color} cropProfile={cropProfile} dataKey={key} />
                     </motion.div>
                 );
             })}
@@ -749,11 +744,18 @@ const LiveDashboard: React.FC<any> = ({ stats, sensorConfig, cropProfile, isDark
             <AIAdvisor stats={stats} cropProfile={cropProfile} />
         </motion.div>
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {Object.keys(sensorConfig).filter(key => stats[key]).map((key) => (
-                <motion.div key={key} variants={{ hidden: { opacity: 0, y: 20 }, visible: { opacity: 1, y: 0 } }}>
-                    <ChartCard title={`${sensorConfig[key].label} Trend`} data={data} dataKey={key} color={sensorConfig[key].color} isDarkMode={isDarkMode} unit={sensorConfig[key].unit} cropProfile={cropProfile} anomalyData={anomalyData?.[key]} notes={notes} />
-                </motion.div>
-            ))}
+            {Object.keys(stats).map((key) => {
+                const config = sensorConfig[key] || {
+                    label: key.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase()),
+                    color: "slate",
+                    unit: ""
+                };
+                return (
+                    <motion.div key={key} variants={{ hidden: { opacity: 0, y: 20 }, visible: { opacity: 1, y: 0 } }}>
+                        <ChartCard title={`${config.label} Trend`} data={data} dataKey={key} color={config.color} isDarkMode={isDarkMode} unit={config.unit} cropProfile={cropProfile} anomalyData={anomalyData?.[key]} notes={notes} />
+                    </motion.div>
+                )
+            })}
         </div>
     </motion.div>
 );
@@ -765,7 +767,7 @@ const HistoricalDashboard: React.FC<any> = ({ sessions, notes, setNotes }) => {
                 <Panel title={t('irrigation_history')} icon={History}>
                     {sessions.length === 0 ? <p className="text-slate-500 text-sm">No irrigation sessions were automatically detected in the selected time range.</p> :
                         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-                            {sessions.map((s: IrrigationSession, index: number) => <IrrigationCard key={index} session={s} />)}
+                            {sessions.map((s: IrrigationSession) => <IrrigationCard key={s.startTime} session={s} />)}
                         </div>
                     }
                 </Panel>
@@ -778,12 +780,12 @@ const HistoricalDashboard: React.FC<any> = ({ sessions, notes, setNotes }) => {
         </motion.div>
     )
 };
-const SensorCard: React.FC<{ label: string, stats?: Stats, unit: string, icon: React.ElementType, color: string, cropProfile?: CropProfile, dataKey: keyof SensorData }> = React.memo(({ label, stats, unit, icon: Icon, color, cropProfile, dataKey }) => {
+const SensorCard: React.FC<{ label: string, stats?: Stats, unit: string, icon: React.ElementType, color: string, cropProfile?: CropProfile, dataKey: string }> = React.memo(({ label, stats, unit, icon: Icon, color, cropProfile, dataKey }) => {
     const t = useTranslation();
     const getStatus = (value: number) => {
         const profileKeyMap: { [key: string]: keyof CropProfile } = {
-            Temperature: 'temperature',
-            Humidity: 'humidity',
+            temperature: 'temperature',
+            humidity: 'humidity',
             soilMoisture6cm: 'moisture6cm',
             soilMoisture15cm: 'moisture15cm',
             lightIntensity: 'lightIntensity'
@@ -807,7 +809,7 @@ const SensorCard: React.FC<{ label: string, stats?: Stats, unit: string, icon: R
         emerald: `bg-emerald-100 dark:bg-emerald-500/20 text-emerald-500 dark:text-emerald-400`,
         violet: `bg-violet-100 dark:bg-violet-500/20 text-violet-500 dark:text-violet-400`,
         yellow: 'bg-yellow-100 dark:bg-yellow-500/20 text-yellow-500 dark:text-yellow-400',
-        slate: 'bg-slate-200 dark:bg-slate-600/20 text-slate-500 dark:text-slate-400',
+        slate: 'bg-slate-200 dark:bg-slate-700 text-slate-500 dark:text-slate-400',
         blue: 'bg-blue-100 dark:bg-blue-500/20 text-blue-500 dark:text-blue-400',
         purple: 'bg-purple-100 dark:bg-purple-500/20 text-purple-500 dark:text-purple-400',
         indigo: 'bg-indigo-100 dark:bg-indigo-500/20 text-indigo-500 dark:text-indigo-400',
@@ -879,7 +881,7 @@ function App() {
             }
         });
         return () => unsub();
-    }, [selectedMaster]);
+    }, []); // Removed selectedMaster dependency to prevent re-fetch loop
 
     // Fetch data for the selected master node
     useEffect(() => {
@@ -890,37 +892,42 @@ function App() {
         const masterRef = ref(db, `DHARA/${selectedMaster}`);
         const unsub = onValue(masterRef, (snapshot) => {
             const masterData = snapshot.val() || {};
+            // Filter for slave nodes and also 'Control' if it exists.
             const slaves = Object.keys(masterData).filter(key => key.startsWith('Slave('));
             setSlaveNodes(slaves);
             setAllDevicesData(masterData);
             setIsLoading(false);
-        });
+        }, { onlyOnce: false });
         return () => unsub();
     }, [selectedMaster]);
 
     // irrigation state subscription
     useEffect(() => {
         if (!selectedMaster || activeView === 'overview') return;
-        const irrigationRef = ref(db, `DHARA/${selectedMaster}/${activeView}/Control/Irrigation`);
-        const unsub = onValue(irrigationRef, (snapshot) => { setActiveIrrigationState(snapshot.val() === 1); });
+        // The path to Irrigation control may be directly under the Master
+        const irrigationRef = ref(db, `DHARA/${selectedMaster}/Control/Irrigation`);
+        const unsub = onValue(irrigationRef, (snapshot) => {
+            setActiveIrrigationState(snapshot.val() === 1);
+        });
         return () => unsub();
     }, [selectedMaster, activeView]);
 
-    // Memoized processing for the currently active device's detailed data (UPDATED LOGIC)
+    // ** REWRITTEN DYNAMIC DATA PROCESSING HOOK **
     const activeData: ProcessedDeviceData | null = useMemo(() => {
         if (activeView === 'overview' || !allDevicesData[activeView]) return null;
 
-        const rawDeviceData = allDevicesData[activeView];
-        const sensorData = rawDeviceData.sensorData;
-        if (!sensorData) return { fullData: [], current: null, stats: {}, anomalyData: {} };
+        // 1. Get raw data directly from the slave node object. It no longer has a 'sensorData' property.
+        const rawDeviceData: DeviceRawData = allDevicesData[activeView];
+        if (!rawDeviceData || typeof rawDeviceData !== 'object') {
+            return { fullData: [], current: null, stats: {}, anomalyData: {} };
+        }
 
-        const sorted = Object.entries(sensorData)
-            .filter(([key]) => !isNaN(parseInt(key, 10)))
+        // 2. Convert the epoch-keyed object into a sorted array of data points.
+        const sorted = Object.entries(rawDeviceData)
+            .filter(([key, value]) => !isNaN(parseInt(key, 10)) && typeof value === 'object' && value !== null)
             .map(([epoch, data]) => ({
                 timestamp: parseInt(epoch, 10) * 1000,
                 ...(data as SensorData),
-                // Merge RSSI if available
-                RSSI: rawDeviceData.RSSI?.[epoch] ?? -100 // default if no RSSI data for this timestamp
             }))
             .sort((a, b) => a.timestamp - b.timestamp);
 
@@ -928,31 +935,53 @@ function App() {
 
         setTotalDataPoints(sorted.length);
 
-        const SENSOR_KEYS: (keyof SensorData)[] = ["Temperature", "Humidity", "soilMoisture6cm", "soilMoisture15cm", "lightIntensity", "weight", "tilt", "latitude", "longitude", "altitude", "gpsAccuracy", "RSSI"];
-        const stats: DeviceStats = {};
-        const anomalyData: AnomalyData = {};
+        // 3. Dynamically discover all unique sensor keys from the entire dataset.
+        const allKeys = new Set<string>();
+        sorted.forEach(dataPoint => {
+            Object.keys(dataPoint).forEach(key => {
+                // Only consider keys with numeric values for stats
+                if (key !== 'timestamp' && typeof dataPoint[key] === 'number') {
+                    allKeys.add(key);
+                }
+            });
+        });
+        const dynamicSensorKeys = Array.from(allKeys);
 
-        SENSOR_KEYS.forEach(key => {
+        // 4. Calculate statistics for each dynamically discovered key.
+        const stats: DeviceStats = {};
+        dynamicSensorKeys.forEach(key => {
             const values = sorted.map(d => d[key]).filter((v): v is number => typeof v === 'number' && isFinite(v));
             if (values.length > 0) {
                 const avg = values.reduce((a, b) => a + b, 0) / values.length;
-                stats[key] = { current: values[values.length - 1], min: Math.min(...values), max: Math.max(...values), avg: avg };
+                stats[key] = {
+                    current: values[values.length - 1],
+                    min: Math.min(...values),
+                    max: Math.max(...values),
+                    avg: avg
+                };
             }
         });
 
-        return { fullData: sorted, current: sorted[sorted.length - 1] ?? null, stats, anomalyData };
+        return { fullData: sorted, current: sorted[sorted.length - 1] ?? null, stats, anomalyData: {} };
     }, [allDevicesData, activeView]);
+
 
     const overviewData: OverviewDeviceData[] = useMemo(() => {
         return slaveNodes.map(slaveKey => {
-            const deviceData = allDevicesData[slaveKey]?.sensorData;
+            const deviceData = allDevicesData[slaveKey];
             if (!deviceData) return { mac: slaveKey, latest: null };
 
             const sortedEpochs = Object.keys(deviceData).filter(key => !isNaN(parseInt(key))).sort((a, b) => parseInt(a) - parseInt(b));
             if (sortedEpochs.length === 0) return { mac: slaveKey, latest: null };
             const latestEpoch = sortedEpochs[sortedEpochs.length - 1];
 
-            return { mac: slaveKey, latest: { timestamp: parseInt(latestEpoch) * 1000, ...deviceData[latestEpoch] as any, RSSI: allDevicesData[slaveKey].RSSI?.[latestEpoch] ?? -100 } };
+            return {
+                mac: slaveKey,
+                latest: {
+                    timestamp: parseInt(latestEpoch) * 1000,
+                    ...(deviceData[latestEpoch] as SensorData)
+                }
+            };
         });
     }, [allDevicesData, slaveNodes]);
 
@@ -961,8 +990,8 @@ function App() {
     const activeCropProfile = useMemo(() => cropProfiles.find(c => c.id === selectedCropId), [cropProfiles, selectedCropId]);
 
     const handleIrrigationToggle = () => {
-        if (activeView !== 'overview' && selectedMaster) {
-            const irrigationRef = ref(db, `DHARA/${selectedMaster}/${activeView}/Control/Irrigation`);
+        if (selectedMaster) {
+            const irrigationRef = ref(db, `DHARA/${selectedMaster}/Control/Irrigation`);
             set(irrigationRef, activeIrrigationState ? 0 : 1);
         }
     }
@@ -972,16 +1001,13 @@ function App() {
         setIsExporting(true);
 
         if (formatType === 'excel') {
-            const exportData = activeData.fullData.map(d => ({
-                timestamp: format(d.timestamp, 'yyyy-MM-dd HH:mm:ss'),
-                temperature: d.Temperature, humidity: d.Humidity,
-                soilMoisture6cm: d.soilMoisture6cm, soilMoisture15cm: d.soilMoisture15cm,
-                lightIntensity: d.lightIntensity, irrigation: d.irrigation, weight: d.weight,
-                accelX: d.accelerationX, accelY: d.accelerationY, accelZ: d.accelerationZ,
-                gyroX: d.gyroX, gyroY: d.gyroY, gyroZ: d.gyroZ,
-                tilt: d.tilt, latitude: d.latitude, longitude: d.longitude,
-                altitude: d.altitude, gpsAccuracy: d.gpsAccuracy, signalStrength: d.RSSI
-            }));
+            const exportData = activeData.fullData.map(d => {
+                const { timestamp, ...rest } = d;
+                return {
+                    timestamp: format(timestamp, 'yyyy-MM-dd HH:mm:ss'),
+                    ...rest
+                }
+            });
             const ws = XLSX.utils.json_to_sheet(exportData);
             const wb = XLSX.utils.book_new();
             XLSX.utils.book_append_sheet(wb, ws, 'Sensor Data');
